@@ -1,4 +1,4 @@
-package s3ds
+package dynamods
 
 import (
 	"testing"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
+	ds "github.com/ipfs/go-datastore"
 	dstest "github.com/ipfs/go-datastore/test"
 )
 
@@ -39,6 +40,28 @@ func TestSuite(t *testing.T) {
 	t.Run("many puts and gets, query", func(t *testing.T) {
 		dstest.SubtestManyKeysAndQuery(t, dynds)
 	})
+	t.Run("ttl works", func(t *testing.T) {
+		k := ds.NewKey("/test/key")
+		dur := 10 * time.Second
+		expires := time.Now().UTC().Add(dur)
+		err := dynds.PutWithTTL(k, []byte("hi"), dur)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ttl, err := dynds.GetExpiration(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ttl.Unix() != expires.Unix() {
+			t.Errorf("%v != %v", ttl.Unix(), expires.Unix())
+		}
+
+		err = dynds.SetTTL(k, dur)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func devMakeTable(dynds *dynamodb.DynamoDB, tableName string) error {
@@ -51,6 +74,14 @@ func devMakeTable(dynds *dynamodb.DynamoDB, tableName string) error {
 			{KeyType: aws.String("HASH"), AttributeName: aws.String(keyKey)},
 		},
 		TableName: aws.String(tableName),
+	})
+
+	_, err = dynds.UpdateTimeToLive(&dynamodb.UpdateTimeToLiveInput{
+		TableName: aws.String(tableName),
+		TimeToLiveSpecification: &dynamodb.TimeToLiveSpecification{
+			AttributeName: aws.String(ttlKey),
+			Enabled:       aws.Bool(true),
+		},
 	})
 	if err == nil {
 		time.Sleep(2 * time.Second) // give it time to go

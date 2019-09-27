@@ -1,10 +1,11 @@
-package s3ds
+package dynamods
 
 import (
 	"fmt"
-	"log"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -29,6 +30,7 @@ const (
 	defaultWorkers = 100
 	keyKey         = "k"
 	valueKey       = "v"
+	ttlKey         = "expires"
 )
 
 type DynamoTable struct {
@@ -90,12 +92,20 @@ func NewDynamoDatastore(conf Config) (*DynamoTable, error) {
 }
 
 func (s *DynamoTable) Put(k ds.Key, value []byte) error {
+	return s.put(k, value, -1)
+}
+
+func (s *DynamoTable) put(k ds.Key, value []byte, ttl int64) error {
+	item := map[string]*dynamodb.AttributeValue{
+		keyKey:   &dynamodb.AttributeValue{S: aws.String(k.String())},
+		valueKey: &dynamodb.AttributeValue{B: value},
+	}
+	if ttl > 0 {
+		item[ttlKey] = &dynamodb.AttributeValue{N: aws.String(strconv.FormatInt(ttl, 10))}
+	}
 	_, err := s.DynamoDB.PutItem(&dynamodb.PutItemInput{
 		TableName: aws.String(s.TableName),
-		Item: map[string]*dynamodb.AttributeValue{
-			keyKey:   &dynamodb.AttributeValue{S: aws.String(k.String())},
-			valueKey: &dynamodb.AttributeValue{B: value},
-		},
+		Item:      item,
 	})
 	return parseError(err)
 }
@@ -114,6 +124,49 @@ func (s *DynamoTable) Get(k ds.Key) ([]byte, error) {
 	}
 
 	return nil, ds.ErrNotFound
+}
+
+func (s *DynamoTable) PutWithTTL(key ds.Key, value []byte, ttl time.Duration) error {
+	ttlInt := time.Now().UTC().Add(ttl).Unix()
+	return s.put(key, value, ttlInt)
+}
+
+func (s *DynamoTable) SetTTL(key ds.Key, ttl time.Duration) error {
+	ttlInt := time.Now().UTC().Add(ttl).Unix()
+	_, err := s.DynamoDB.UpdateItem(&dynamodb.UpdateItemInput{
+		TableName:        aws.String(s.TableName),
+		Key:              dynamoKeyFromDsKey(key.String()),
+		UpdateExpression: aws.String("SET " + ttlKey + "= :ttlInt"),
+		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+			":ttlInt": &dynamodb.AttributeValue{N: aws.String(strconv.FormatInt(ttlInt, 10))},
+		},
+	})
+	return parseError(err)
+}
+
+func (s *DynamoTable) GetExpiration(k ds.Key) (time.Time, error) {
+	resp, err := s.DynamoDB.GetItem(&dynamodb.GetItemInput{
+		Key:                  dynamoKeyFromDsKey(k.String()),
+		ProjectionExpression: aws.String(ttlKey),
+		TableName:            aws.String(s.TableName),
+		ConsistentRead:       aws.Bool(true),
+	})
+
+	err = parseError(err)
+
+	if err != nil {
+		return time.Unix(0, 0), parseError(err)
+	}
+
+	if resp.Item[ttlKey] != nil {
+		int, err := strconv.ParseInt(*resp.Item[ttlKey].N, 10, 64)
+		if err != nil {
+			return time.Unix(0, 0), err
+		}
+		return time.Unix(int, 0), nil
+	}
+
+	return time.Unix(0, 0), nil
 }
 
 func (s *DynamoTable) Has(k ds.Key) (exists bool, err error) {
@@ -146,7 +199,6 @@ func (s *DynamoTable) GetSize(k ds.Key) (size int, err error) {
 }
 
 func (s *DynamoTable) Delete(k ds.Key) error {
-	log.Printf("deleting: %s", k.String())
 	_, err := s.DynamoDB.DeleteItem(&dynamodb.DeleteItemInput{
 		TableName: aws.String(s.TableName),
 		Key:       dynamoKeyFromDsKey(k.String()),
@@ -217,51 +269,6 @@ func (s *DynamoTable) Query(q dsq.Query) (dsq.Results, error) {
 		index++
 		return dsq.Result{Entry: entry}, true
 	}
-
-	// resp, err := s.S3.ListObjectsV2(&s3.ListObjectsV2Input{
-	// 	Bucket:  aws.String(s.Bucket),
-	// 	Prefix:  aws.String(s.s3Path(q.Prefix)),
-	// 	MaxKeys: aws.Int64(int64(limit)),
-	// })
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// index := q.Offset
-	// nextValue := func() (dsq.Result, bool) {
-	// 	for index >= len(resp.Contents) {
-	// 		if !*resp.IsTruncated {
-	// 			return dsq.Result{}, false
-	// 		}
-
-	// 		index -= len(resp.Contents)
-
-	// 		resp, err = s.S3.ListObjectsV2(&s3.ListObjectsV2Input{
-	// 			Bucket:            aws.String(s.Bucket),
-	// 			Prefix:            aws.String(s.s3Path(q.Prefix)),
-	// 			Delimiter:         aws.String("/"),
-	// 			MaxKeys:           aws.Int64(listMax),
-	// 			ContinuationToken: resp.NextContinuationToken,
-	// 		})
-	// 		if err != nil {
-	// 			return dsq.Result{Error: err}, false
-	// 		}
-	// 	}
-
-	// 	entry := dsq.Entry{
-	// 		Key: ds.NewKey(*resp.Contents[index].Key).String(),
-	// 	}
-	// 	if !q.KeysOnly {
-	// 		value, err := s.Get(ds.NewKey(entry.Key))
-	// 		if err != nil {
-	// 			return dsq.Result{Error: err}, false
-	// 		}
-	// 		entry.Value = value
-	// 	}
-
-	// 	index++
-	// 	return dsq.Result{Entry: entry}, true
-	// }
 
 	return dsq.ResultsFromIterator(q, dsq.Iterator{
 		Close: func() error {
@@ -423,3 +430,5 @@ func worker(jobs <-chan func() error, results chan<- error) {
 }
 
 var _ ds.Batching = (*DynamoTable)(nil)
+
+var _ ds.TTLDatastore = (*DynamoTable)(nil)
