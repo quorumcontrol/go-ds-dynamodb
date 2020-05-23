@@ -14,7 +14,7 @@ func TestSuite(t *testing.T) {
 	// run docker-compose up in this repo in order to get a local
 	// s3 running on port 4572
 	config := Config{
-		RegionEndpoint: "http://localhost:4569",
+		RegionEndpoint: "http://localhost:4566",
 		TableName:      "localTable",
 		Region:         "us-east-1",
 		AccessKey:      "localonlyac",

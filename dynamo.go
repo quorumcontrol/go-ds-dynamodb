@@ -97,8 +97,8 @@ func (s *DynamoTable) Put(k ds.Key, value []byte) error {
 
 func (s *DynamoTable) put(k ds.Key, value []byte, ttl int64) error {
 	item := map[string]*dynamodb.AttributeValue{
-		keyKey:   &dynamodb.AttributeValue{S: aws.String(k.String())},
-		valueKey: &dynamodb.AttributeValue{B: value},
+		keyKey:   {S: aws.String(k.String())},
+		valueKey: {B: value},
 	}
 	if ttl > 0 {
 		item[ttlKey] = &dynamodb.AttributeValue{N: aws.String(strconv.FormatInt(ttl, 10))}
@@ -138,7 +138,7 @@ func (s *DynamoTable) SetTTL(key ds.Key, ttl time.Duration) error {
 		Key:              dynamoKeyFromDsKey(key.String()),
 		UpdateExpression: aws.String("SET " + ttlKey + "= :ttlInt"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
-			":ttlInt": &dynamodb.AttributeValue{N: aws.String(strconv.FormatInt(ttlInt, 10))},
+			":ttlInt": {N: aws.String(strconv.FormatInt(ttlInt, 10))},
 		},
 	})
 	return parseError(err)
@@ -204,6 +204,10 @@ func (s *DynamoTable) Delete(k ds.Key) error {
 		Key:       dynamoKeyFromDsKey(k.String()),
 	})
 	return parseError(err)
+}
+
+func (s *DynamoTable) Sync(prefix ds.Key) error {
+	return nil
 }
 
 func (s *DynamoTable) Query(q dsq.Query) (dsq.Results, error) {
@@ -326,7 +330,7 @@ func (b *s3Batch) Delete(k ds.Key) error {
 
 func dynamoKeyFromDsKey(k string) map[string]*dynamodb.AttributeValue {
 	return map[string]*dynamodb.AttributeValue{
-		keyKey: &dynamodb.AttributeValue{S: aws.String(k)},
+		keyKey: {S: aws.String(k)},
 	}
 }
 

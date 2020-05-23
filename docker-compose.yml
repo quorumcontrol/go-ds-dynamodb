@@ -1,9 +1,6 @@
 version: "3"
 services:
- localstack:
-    image: localstack/localstack
-    environment:
-      - DEBUG=1
-      - SERVICES=dynamodb
+ dynamodb-local:
+    image: amazon/dynamodb-local
     ports:
-      - 4569:4569
+      - 4566:8000
